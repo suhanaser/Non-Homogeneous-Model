@@ -1,0 +1,276 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Jul 15 10:35:37 2020
+
+@author: Suha Naser-Khdour
+"""
+
+from Bio import SeqIO
+from Bio import AlignIO
+from Bio.Nexus import Nexus
+import math
+import itertools as ite
+import numpy as np
+import os
+import glob
+import pandas as pd
+import shutil
+from random import sample
+import linecache
+from itertools import permutations
+import re
+
+def extract_subalignment(aln_in,aln_out):
+    nex = Nexus.Nexus()
+    nex.read(aln_in)
+    aln = AlignIO.read(open(aln_in), "nexus")
+    for k,v in nex.taxsets.items():       
+        sequences = []
+        for rec in aln:
+            if rec.name in v:
+                sequences.append(rec)
+        SeqIO.write(sequences, os.path.splitext(aln_in)[0]+k+'.nex', "nexus")
+
+
+def random_lines(n,partition):
+    '''
+    Randomly return n% of the partitions 
+    '''
+    nLines = 0
+    i = 0
+    lines = []
+    with open(partition, 'r') as inf:
+        for line in inf:
+            if 'CHARSET' in line:
+                nLines += 1
+                lines.append(i)
+            i += 1
+    idxs = sample(lines, int(nLines/n))
+    rLines =  [linecache.getline(partition, j) for j in idxs]
+    with open(partition, 'w') as inf:
+        inf.writelines('#nexus\n')
+        inf.writelines('begin SETS;\n')
+        inf.writelines('[loci]\n')
+        for i in rLines:
+            inf.writelines(i)
+        inf.writelines('end;\n')
+    return        
+
+def nCr(n,r):
+    f = math.factorial
+    return f(n) // f(r) // f(n-r)
+
+def Qfinder(iqtree):
+    condition = False
+    Q = []
+    with open(iqtree, 'r') as inf:
+        for line in inf:
+            if 'State frequencies: (estimated with maximum likelihood)' in line:
+                condition = False
+            if condition and line.strip():
+                Q.append(line.strip())
+            if 'Substitution parameters (lower-diagonal) and state frequencies in PAML format (can be used as input for IQ-TREE):' in line:
+                condition = True
+            if 'Log-likelihood of the tree:' in line:
+                end  = line.index('(')
+                logL = float(line[28:end])
+            if 'Number of free parameters' in line:
+                FP = float(line[59:])
+    Q = [i.split(' ') for i in Q]
+    Q = [i for sublist in Q for i in sublist]
+    Q = list(map(float, Q))
+    clade = os.path.splitext(os.path.basename(iqtree))[0]
+    df = pd.DataFrame([clade, logL, FP]).T
+    df.columns = ['group','logL','FP']
+    return [clade,Q], df
+
+def Qdist(dictionary):
+    no = nCr(len(dictionary),2)+1
+    p=np.empty([no,3],dtype='U22')
+    p[0] = np.array(['matrix1','matrix2','dist'])
+    j = 1
+    for q in ite.combinations(list(range(len(dictionary))),2): #iterating over all taxa for sites
+        for i in range(0,len(dictionary[q[0]][1])):
+            d = np.linalg.norm(dictionary[q[0]][1][i]-dictionary[q[1]][1][i])
+        p[j] = np.array([dictionary[q[0]][0],dictionary[q[1]][0],d]) 
+        j += 1 
+    df =pd.DataFrame(p[1:], columns=p[0])
+    df['dist'] = pd.to_numeric(df['dist'])
+    df = df[df.dist == df.dist.min()]
+    return df.values.tolist()
+
+def merge_two_partitions(partition, merged_partition, Q1, Q2):
+    with open(merged_partition, 'w') as outf:
+        outf.writelines('#nexus\n')
+        outf.writelines("begin SETS;\n")
+        outf.writelines("[loci]\n")
+    for i in [Q1,Q2]:
+        j = os.path.join(rootDir, 'alignment' + i+'.nex')
+        with open(partition, 'r') as inf, open(merged_partition, 'a') as outf:
+            for line in inf:
+                if 'CHARSET' in line:
+                    index = line.index("=") - 1
+                    outf.writelines(line[0:index]+i+' = '+j+':'+line[index+2:-1]+'\n') 
+    with open(merged_partition, 'a') as outf:
+        outf.writelines('end;\n')
+    return
+
+def add_partition(merged_partition, original_partition, Q):
+    with open(merged_partition, 'w') as outf:
+        outf.writelines('#nexus\n')
+        outf.writelines("begin SETS;\n")
+        outf.writelines("[loci]\n")
+    for i in Q:
+        j = os.path.join(rootDir, 'alignment' + i+'.nex')
+        with open(original_partition, 'r') as inf, open(merged_partition, 'a') as outf:
+            for line in inf:
+                if 'CHARSET' in line:
+                    index = line.index("=") - 1
+                    outf.writelines(line[0:index]+i+' = '+j+':'+line[index+2:-1]+'\n') 
+    with open(merged_partition, 'a') as outf:
+        outf.writelines('end;\n')
+    return
+
+def merge_all_partitions(partition, merged_partition):
+    with open(merged_partition, 'w') as outf:
+        outf.writelines('#nexus\n')
+        outf.writelines("begin SETS;\n")
+        outf.writelines("[loci]\n")
+    for j in glob.glob(os.path.join(rootDir, 'alignment*.nex')):
+        i = os.path.splitext(os.path.basename(j))[0].split('alignment')[1]
+        with open(partition, 'r') as inf, open(merged_partition, 'a') as outf:
+            for line in inf:
+                if 'CHARSET' in line:
+                    index = line.index("=") - 1
+                    outf.writelines(line[0:index]+i+' = '+j+':'+line[index+2:-1]+'\n') 
+    with open(merged_partition, 'a') as outf:
+        outf.writelines('end;\n')
+    return
+
+
+if __name__ == '__main__':
+    rootDir  = '/data' #The root directory where all files will be saved
+    
+    '''
+    Estimate a separate Q matrix for each group
+    '''
+    for aln in glob.glob(os.path.join(rootDir, 'alignment*.nex')):
+        partition = os.path.join(rootDir, 'partition.nex')
+        prefix = os.path.join(rootDir, 'partition' + os.path.splitext(os.path.basename(aln))[0].split('alignment')[1])
+        runIqtree = " ".join(['iqtree -s', aln, '-spp', partition, '--prefix', prefix, '-nt 35'])
+        os.system(runIqtree)
+    for tree in glob.glob(os.path.join(rootDir, 'partition*.treefile')):
+        aln = os.path.join(rootDir, 'alignment' + os.path.splitext(os.path.basename(tree))[0].split('partition')[1] + '.nex')
+        bestModel = os.path.splitext(tree)[0]+'.best_model.nex'
+        prefix = os.path.join(rootDir, 'Q' + os.path.splitext(os.path.basename(tree))[0].split('partition')[1])
+        runIqtree = " ".join(['iqtree -s', aln, '-spp', bestModel, '-te', tree, '--model-joint GTR20+FO --min-freq 0.001 --prefix', prefix, '-nparam 10 -optfromgiven -nt 35'])
+        os.system(runIqtree)
+    
+    results = os.path.join(rootDir, 'results.log')
+    partition = os.path.join(rootDir,'partition.nex')
+    '''
+    Maximum number of matrices: Q1, Q2, ... , Qn
+    '''
+    Qdict=[]
+    df = pd.DataFrame()
+    for q in glob.glob(os.path.join(rootDir, 'Q*.iqtree')):
+        Qdict.append(Qfinder(q)[0])
+        df = df.append(Qfinder(q)[1])
+    logL = 2*df.FP.sum()-2*df.logL.sum()   
+    with open(results,'w') as outf:
+        outf.writelines('iteration 1: A separate matrix for each clade\n')
+        for k in Qdict:
+            outf.write('{}\n'.format(k))
+        outf.writelines('AIC for {} separate models is = {}\n'.format(len(df),logL))
+        outf.writelines('\n')
+    AIC = logL
+    AIC_dir = rootDir
+    Better_AIC_dir = rootDir
+    '''
+    All combinations of two matrices:  n-1 matrices in total
+    '''
+    itr = 2
+    while True:
+        AIC = math.inf
+        for s in ite.combinations(glob.glob(os.path.join(Better_AIC_dir, 'Q*.iqtree')),2):
+            df = pd.DataFrame()
+            Qdict=[]
+            Q1 = os.path.splitext(os.path.basename(s[0]))[0].split('Q')[1]
+            Q2 = os.path.splitext(os.path.basename(s[1]))[0].split('Q')[1]
+            if Q1 != Q2:
+                newDir = os.path.join(rootDir,'Q'+Q1+Q2)
+                l = [item for sublist in Q1+Q2 for item in sublist]
+                duplicates = ['Q' + s for s in [''.join(p) for p in permutations(l)]]
+                for d in [os.path.join(rootDir,d) for d in duplicates]:
+                    if os.path.exists(d):
+                        condition = False
+                        newDir = d
+                        break
+                if condition:
+                    os.mkdir(newDir)
+                    merged_partition = os.path.join(newDir,'partition.nex')
+                    add_partition(partition, merged_partition, l)
+                    runIqtree = " ".join(['iqtree -spp', merged_partition, '-nt 35'])
+                    os.system(runIqtree)
+                    bestModel = os.path.join(newDir, 'partition.nex.best_model.nex')
+                    tree = os.path.join(newDir, 'partition.nex.treefile')
+                    prefix = os.path.join(newDir, 'Q'+Q1+Q2)
+                    runIqtree = " ".join(['iqtree -spp', bestModel, '-te', tree, '--model-joint GTR20+FO --min-freq 0.001 --prefix', prefix, '-nparam 10 -optfromgiven -nt 35'])
+                    os.system(runIqtree)
+                    for q in glob.glob(os.path.join(Better_AIC_dir, 'Q*.iqtree')):
+                        if not os.path.splitext(os.path.basename(q))[0].split('Q')[1] in [Q1,Q2]:
+                            shutil.copy2(q,newDir)
+                    for q in glob.glob(os.path.join(newDir, 'Q*.iqtree')):
+                        Qdict.append(Qfinder(q)[0])
+                        df = df.append(Qfinder(q)[1])
+                    logL = 2*df.FP.sum()-2*df.logL.sum()
+                    if os.path.basename(Better_AIC_dir).split('Q')[1] in [Q1,Q2]:
+                        with open(results,'a') as outf:
+                            outf.writelines('iteration {}: One matrix for clades {} and {} and a separate matrix for any other clade\n'.format(itr,Q1,Q2))
+                            for k in Qdict:
+                                outf.write('{}\n'.format(k))
+                            outf.writelines('AIC for {} separate models is = {}\n'.format(len(df),logL))
+                            outf.writelines('\n')
+                        itr += 1
+                else:
+                    l = os.path.basename(Better_AIC_dir).split('Q')[1]                    
+                    if not os.path.basename(Better_AIC_dir).split('Q')[1] in newDir:
+                        for q in glob.glob(os.path.join(newDir, 'Q*.iqtree')):
+                            if os.path.splitext(os.path.basename(q))[0].split('Q')[1] in l:
+                                os.rename(q,os.path.join(os.path.dirname(q),re.sub('[Q]', 'c', os.path.basename(q))))
+                        shutil.copy2(os.path.join(Better_AIC_dir,os.path.basename(Better_AIC_dir)+'.iqtree'),newDir)
+                    for q in glob.glob(os.path.join(newDir, 'Q*.iqtree')):
+                        Qdict.append(Qfinder(q)[0])
+                        df = df.append(Qfinder(q)[1])
+                    logL = 2*df.FP.sum()-2*df.logL.sum()
+                if logL < AIC:
+                    AIC = logL
+                    AIC_dir = newDir
+        if AIC_dir != Better_AIC_dir:
+            Better_AIC_dir = AIC_dir
+        else:
+            break
+        if len(df) <= 2:
+            break
+    '''
+    One matrix for all clades: Q0
+    '''
+    merged_partition = os.path.join(rootDir, 'partition0.nex')
+    merge_all_partitions(partition, merged_partition)
+    runIqtree = " ".join(['iqtree -spp', merged_partition, '-nt 35'])
+    os.system(runIqtree)
+    bestModel = os.path.join(rootDir,'partition0.nex.best_model.nex')
+    tree = os.path.join(rootDir,'partition0.nex.treefile')
+    prefix = os.path.join(rootDir,'Q0')
+    runIqtree = " ".join(['iqtree -spp', bestModel, '-te', tree, '--model-joint GTR20+FO --min-freq 0.001 --prefix', prefix, '-nparam 10 -optfromgiven -nt 35'])
+    os.system(runIqtree)
+    Qdict = Qfinder(os.path.join(rootDir,'q0.iqtree'))[0]
+    df = Qfinder(os.path.join(rootDir,'q0.iqtree'))[1]
+    logL = 2*df.FP.sum()-2*df.logL.sum()
+    with open(results,'a') as outf:
+        outf.writelines('iteration {}: One matrix for all clades\n'.format(itr))
+        for k in Qdict:
+            outf.write('{}\n'.format(k))
+        outf.writelines('AIC score for 1 model is = {}\n'.format(logL))
+        outf.writelines('\n')
+
