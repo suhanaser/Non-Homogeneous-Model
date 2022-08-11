@@ -1,0 +1,10 @@
+Gorilla,Human,Bonobo,Chimpanzee,Orangutan,Gibbon
+Crab-eating_macaque,Rhesus_macaque,Olive_Baboon,Green_monkey
+Guinea_Pig,long-tailed_chinchilla,Degu,Naked_mole_rat
+Chinese_hamster,Golden_hamster,Prairie_vole,deer_mouse,Rat,Mouse,Three-toed_jerboas
+Straw-colored_fruit_bat,Black_flying_fox,Large_flying_fox,Greater_false_vampire_bat,Greater_horseshoe_bat
+Brandts_bat,Little_brown_bat,Big_brown_bat,Parnells_mustached_bat
+Minke_whale,Sperm_whale,Baiji,Killer-whale,Bottlenose_Dolphin
+Yak,Cow,Goat,Sheep,Tibetan_antelope
+Cat,Dog,Tiger,Giant_panda,Weddell_seal,Walrus,Ferret
+Cape_golden_mole,lesser_hedgehog_tenrec,Cape_elephant_shrew,Aardvark,Elephant,Rock_Hyrax,Manatee
